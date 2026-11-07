@@ -1,0 +1,6 @@
+{
+  "name": "Leo MP3 Player",
+  "description": "Reproductor ligero de audio MP3 para Android 15 con visualización de espectro verde tipo osciloscopio, botones táctiles optimizados, soporte en segundo plano y listas .leo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

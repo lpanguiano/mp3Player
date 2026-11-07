@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Leo MP3 Player</string>
+    <string name="notification_channel_name">Reproducción de Audio</string>
+    <string name="notification_channel_desc">Notificaciones del reproductor MP3</string>
+</resources>
