@@ -36,7 +36,8 @@ import androidx.compose.ui.geometry.Size
 
 @Composable
 fun OscilloscopeWaveformView(
-    waveform: List<Float>,
+    waveformCh1: List<Float>,
+    waveformCh2: List<Float> = emptyList(),
     currentPositionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
@@ -130,52 +131,57 @@ fun OscilloscopeWaveformView(
                 )
             }
 
-            // Dual channels: Top Channel (Left) and Bottom Channel (Right)
+            // 2. Dual Channels: Canal 1 (Superior) and Canal 2 (Inferior)
             val halfHeight = height / 2f
-            val channelPadding = 4f
             val ch1Center = halfHeight / 2f
             val ch2Center = halfHeight + (halfHeight / 2f)
-            val maxAmpHeight = (halfHeight / 2f) - channelPadding
+            val channelMaxAmp = (halfHeight / 2f) * 0.88f
 
-            // 2. Draw Waveform spikes (Oscilloscope stereo view matching reference image)
-            val points = if (waveform.isNotEmpty()) waveform else List(160) { index ->
-                val p = index / 160f
-                (sin(p * Math.PI).toFloat() * 0.45f).coerceIn(0.08f, 0.85f)
-            }
-
-            val numBars = points.size
+            val ptsCh1 = if (waveformCh1.isNotEmpty()) waveformCh1 else List(240) { 0f }
+            val ptsCh2 = if (waveformCh2.isNotEmpty()) waveformCh2 else ptsCh1
+            val numBars = ptsCh1.size
             val barSpacing = width / numBars
 
             for (i in 0 until numBars) {
                 val x = i * barSpacing + (barSpacing / 2f)
-                val baseAmp = points[i]
 
-                // Real-time animation subtle effect near playhead
-                val distToPlayhead = abs((x / width) - displayProgress)
-                val dynamicPulse = if (isPlaying && distToPlayhead < 0.08f) {
-                    (sin(System.currentTimeMillis() / 70.0 + i) * 0.1f).toFloat()
-                } else 0f
+                // --- CANAL 1 (SUPERIOR - IZQUIERDO) ---
+                val amp1 = ptsCh1[i].coerceIn(0f, 1f) * channelMaxAmp
+                if (amp1 > 1.2f) {
+                    drawLine(
+                        color = NeonGreen,
+                        start = Offset(x, ch1Center - amp1),
+                        end = Offset(x, ch1Center + amp1),
+                        strokeWidth = 1.8f,
+                        cap = StrokeCap.Round
+                    )
+                } else {
+                    drawLine(
+                        color = NeonGreen.copy(alpha = 0.35f),
+                        start = Offset(x - (barSpacing * 0.4f), ch1Center),
+                        end = Offset(x + (barSpacing * 0.4f), ch1Center),
+                        strokeWidth = 1f
+                    )
+                }
 
-                val amp = (baseAmp + dynamicPulse).coerceIn(0.06f, 0.95f) * maxAmpHeight
-
-                // Channel 1 (Upper channel) - Stereo Left
-                drawLine(
-                    color = NeonGreen,
-                    start = Offset(x, ch1Center - amp),
-                    end = Offset(x, ch1Center + amp),
-                    strokeWidth = 1.6f,
-                    cap = StrokeCap.Round
-                )
-
-                // Channel 2 (Lower channel) - Stereo Right with slight natural phase difference
-                val ch2Amp = (amp * 0.96f).coerceAtLeast(3f)
-                drawLine(
-                    color = NeonGreen,
-                    start = Offset(x, ch2Center - ch2Amp),
-                    end = Offset(x, ch2Center + ch2Amp),
-                    strokeWidth = 1.6f,
-                    cap = StrokeCap.Round
-                )
+                // --- CANAL 2 (INFERIOR - DERECHO) ---
+                val amp2 = ptsCh2[i].coerceIn(0f, 1f) * channelMaxAmp
+                if (amp2 > 1.2f) {
+                    drawLine(
+                        color = NeonGreen,
+                        start = Offset(x, ch2Center - amp2),
+                        end = Offset(x, ch2Center + amp2),
+                        strokeWidth = 1.8f,
+                        cap = StrokeCap.Round
+                    )
+                } else {
+                    drawLine(
+                        color = NeonGreen.copy(alpha = 0.35f),
+                        start = Offset(x - (barSpacing * 0.4f), ch2Center),
+                        end = Offset(x + (barSpacing * 0.4f), ch2Center),
+                        strokeWidth = 1f
+                    )
+                }
             }
 
             // 3. Draw A-B Loop overlay and markers if set

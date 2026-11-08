@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -255,7 +256,8 @@ fun PlayerScreen(
                     .padding(vertical = 4.dp)
             ) {
                 OscilloscopeWaveformView(
-                    waveform = playbackState.currentTrack?.waveformPoints ?: emptyList(),
+                    waveformCh1 = playbackState.currentTrack?.waveformPoints ?: emptyList(),
+                    waveformCh2 = playbackState.currentTrack?.waveformPointsCh2 ?: emptyList(),
                     currentPositionMs = playbackState.currentPositionMs,
                     durationMs = playbackState.durationMs,
                     isPlaying = playbackState.isPlaying,
@@ -435,6 +437,7 @@ fun PlayerScreen(
                             .weight(1f)
                             .height(48.dp)
                             .testTag("button_previous_audio"),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = DarkCard,
                             contentColor = MintWhite
@@ -442,13 +445,13 @@ fun PlayerScreen(
                         border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(Icons.Default.SkipPrevious, contentDescription = "Audio anterior", modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Anterior", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Icon(Icons.Default.SkipPrevious, contentDescription = "Audio anterior", modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text("Ant.", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                     }
 
                     // Spacer in the middle so the anterior and siguiente remain half the width of other buttons
-                    Spacer(Modifier.weight(1.8f))
+                    Spacer(Modifier.weight(1.4f))
 
                     // Siguiente audio (half-width button)
                     Button(
@@ -457,6 +460,7 @@ fun PlayerScreen(
                             .weight(1f)
                             .height(48.dp)
                             .testTag("button_next_audio"),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = DarkCard,
                             contentColor = MintWhite
@@ -464,9 +468,9 @@ fun PlayerScreen(
                         border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Siguiente", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                        Spacer(Modifier.width(4.dp))
-                        Icon(Icons.Default.SkipNext, contentDescription = "Siguiente audio", modifier = Modifier.size(20.dp))
+                        Text("Sig.", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Spacer(Modifier.width(3.dp))
+                        Icon(Icons.Default.SkipNext, contentDescription = "Siguiente audio", modifier = Modifier.size(18.dp))
                     }
                 }
 

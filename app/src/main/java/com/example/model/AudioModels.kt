@@ -10,7 +10,8 @@ data class AudioTrack(
     val uriString: String,
     val title: String,
     val durationMs: Long = 0L,
-    val waveformPoints: List<Float> = emptyList()
+    val waveformPoints: List<Float> = emptyList(),
+    val waveformPointsCh2: List<Float> = emptyList()
 ) {
     val uri: Uri
         get() = Uri.parse(uriString)
