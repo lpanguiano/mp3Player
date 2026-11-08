@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private fun handleIntentData(intent: Intent?) {
         val uri: Uri? = intent?.data
         if (uri != null) {
+            intent.data = null // Clear to avoid re-triggering on reopen
             val path = uri.toString().lowercase()
             if (path.endsWith(".leo")) {
                 viewModel.loadPlaylistFromSAF(uri)

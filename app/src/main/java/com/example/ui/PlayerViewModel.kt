@@ -48,6 +48,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             isBound = true
 
             playerService?.let { s ->
+                val activeTracks = s.getCurrentPlaylist()
+                if (activeTracks.isNotEmpty()) {
+                    _currentPlaylist.value = LeoPlaylist(
+                        name = s.getCurrentPlaylistName(),
+                        tracks = activeTracks
+                    )
+                }
+
                 viewModelScope.launch {
                     s.playbackState.collectLatest { state ->
                         _playbackState.value = state

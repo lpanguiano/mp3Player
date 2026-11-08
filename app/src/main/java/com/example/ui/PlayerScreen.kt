@@ -24,7 +24,7 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -180,7 +180,7 @@ fun PlayerScreen(
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("open_playlist_button").height(40.dp)
                 ) {
-                    Icon(Icons.Default.FormatListBulleted, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Filled.FormatListBulleted, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
                         if (currentPlaylist.tracks.isNotEmpty()) "Lista (${currentPlaylist.tracks.size})" else "Listas .leo",
