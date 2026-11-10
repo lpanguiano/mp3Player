@@ -150,6 +150,33 @@ class AudioPlayerService : Service(), MediaPlayer.OnPreparedListener, MediaPlaye
         playTrack(currentPlaylist[currentTrackIndex])
     }
 
+    fun updateCurrentTrackWaveform(trackWithWaveform: AudioTrack) {
+        val targetId = trackWithWaveform.id
+        val targetUri = trackWithWaveform.uriString
+
+        val updated = currentPlaylist.map { t ->
+            if (t.id == targetId || t.uriString == targetUri) {
+                t.copy(
+                    waveformPoints = trackWithWaveform.waveformPoints,
+                    waveformPointsCh2 = trackWithWaveform.waveformPointsCh2,
+                    durationMs = if (t.durationMs <= 0L) trackWithWaveform.durationMs else t.durationMs
+                )
+            } else t
+        }
+        currentPlaylist = updated
+
+        val cur = _playbackState.value.currentTrack
+        if (cur != null && (cur.id == targetId || cur.uriString == targetUri)) {
+            _playbackState.value = _playbackState.value.copy(
+                currentTrack = cur.copy(
+                    waveformPoints = trackWithWaveform.waveformPoints,
+                    waveformPointsCh2 = trackWithWaveform.waveformPointsCh2,
+                    durationMs = if (cur.durationMs <= 0L) trackWithWaveform.durationMs else cur.durationMs
+                )
+            )
+        }
+    }
+
     fun playTrack(track: AudioTrack) {
         releasePlayer()
 

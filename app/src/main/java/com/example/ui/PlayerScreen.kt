@@ -37,6 +37,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -82,6 +83,7 @@ fun PlayerScreen(
     val savedPlaylists by viewModel.savedPlaylists.collectAsState()
     val showPlaylistSheet by viewModel.showPlaylistSheet.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
+    val loadingState by viewModel.loadingState.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -125,7 +127,7 @@ fun PlayerScreen(
     }
 
     val exportLeoLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
+        ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
         uri?.let { viewModel.savePlaylistToSAF(it) }
     }
@@ -253,19 +255,110 @@ fun PlayerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1.05f)
-                    .padding(vertical = 4.dp)
+                    .padding(vertical = 4.dp),
+                contentAlignment = Alignment.Center
             ) {
+                val activeTrack = playbackState.currentTrack
+                val playlistTrack = currentPlaylist.tracks.find {
+                    it.id == activeTrack?.id || it.uriString == activeTrack?.uriString
+                }
+                val ch1 = if (!activeTrack?.waveformPoints.isNullOrEmpty()) {
+                    activeTrack!!.waveformPoints
+                } else {
+                    playlistTrack?.waveformPoints ?: emptyList()
+                }
+                val ch2 = if (!activeTrack?.waveformPointsCh2.isNullOrEmpty()) {
+                    activeTrack!!.waveformPointsCh2
+                } else {
+                    playlistTrack?.waveformPointsCh2 ?: emptyList()
+                }
+
                 OscilloscopeWaveformView(
-                    waveformCh1 = playbackState.currentTrack?.waveformPoints ?: emptyList(),
-                    waveformCh2 = playbackState.currentTrack?.waveformPointsCh2 ?: emptyList(),
+                    waveformCh1 = ch1,
+                    waveformCh2 = ch2,
                     currentPositionMs = playbackState.currentPositionMs,
-                    durationMs = playbackState.durationMs,
+                    durationMs = if (playbackState.durationMs > 0L) playbackState.durationMs else (playlistTrack?.durationMs ?: 0L),
                     isPlaying = playbackState.isPlaying,
                     onSeek = { targetMs -> viewModel.seekTo(targetMs) },
                     loopPointA = playbackState.loopPointA,
                     loopPointB = playbackState.loopPointB,
                     modifier = Modifier.fillMaxSize()
                 )
+
+                // Loading overlay with file name and progress bar
+                if (loadingState.isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black.copy(alpha = 0.90f))
+                            .border(1.dp, NeonGreen.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.fillMaxWidth(0.92f)
+                        ) {
+                            Text(
+                                text = if (loadingState.totalItems > 1) {
+                                    "Cargando archivo (${loadingState.currentItem}/${loadingState.totalItems}):"
+                                } else {
+                                    "Cargando archivo:"
+                                },
+                                color = NeonGreen,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+
+                            Spacer(Modifier.height(6.dp))
+
+                            Text(
+                                text = loadingState.fileName,
+                                color = MintWhite,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            Spacer(Modifier.height(14.dp))
+
+                            LinearProgressIndicator(
+                                progress = { loadingState.progress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(10.dp)
+                                    .clip(RoundedCornerShape(5.dp)),
+                                color = NeonGreen,
+                                trackColor = DarkCard
+                            )
+
+                            Spacer(Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Analizando audio...",
+                                    color = MintMuted,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    text = "${(loadingState.progress * 100).toInt()}%",
+                                    color = NeonGreen,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // CONTROLS STRIP: A-B Loop & Speed Selector (0.75x, 1.0x, 1.5x, 2.0x)
@@ -631,7 +724,13 @@ fun PlayerScreen(
             onMoveTrack = { from, to -> viewModel.moveTrack(from, to) },
             onRenamePlaylist = { newName -> viewModel.setPlaylistName(newName) },
             onSaveLocally = { viewModel.saveCurrentPlaylistLocally() },
-            onExportLeo = { exportLeoLauncher.launch("${currentPlaylist.name}.leo") },
+            onExportLeo = {
+                val cleanName = currentPlaylist.name
+                    .removeSuffix(".json")
+                    .removeSuffix(".leo")
+                    .ifBlank { "MiLista" } + ".leo"
+                exportLeoLauncher.launch(cleanName)
+            },
             onImportLeo = { importLeoLauncher.launch(arrayOf("*/*")) },
             onLoadSavedPlaylist = { saved -> viewModel.loadPlaylist(saved) },
             onDeleteSavedPlaylist = { name -> viewModel.deleteLocalPlaylist(name) }

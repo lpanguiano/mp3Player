@@ -22,6 +22,22 @@ data class AudioTrack(
         json.put("uri", uriString)
         json.put("title", title)
         json.put("durationMs", durationMs)
+        if (waveformPoints.isNotEmpty()) {
+            val sb = StringBuilder()
+            for (i in waveformPoints.indices) {
+                if (i > 0) sb.append(",")
+                sb.append(String.format(java.util.Locale.US, "%.3f", waveformPoints[i]))
+            }
+            json.put("wf1", sb.toString())
+        }
+        if (waveformPointsCh2.isNotEmpty()) {
+            val sb = StringBuilder()
+            for (i in waveformPointsCh2.indices) {
+                if (i > 0) sb.append(",")
+                sb.append(String.format(java.util.Locale.US, "%.3f", waveformPointsCh2[i]))
+            }
+            json.put("wf2", sb.toString())
+        }
         return json
     }
 
@@ -31,11 +47,22 @@ data class AudioTrack(
             val uri = json.optString("uri", "")
             val title = json.optString("title", "Audio Desconocido")
             val durationMs = json.optLong("durationMs", 0L)
+            val wf1Str = json.optString("wf1", "")
+            val wf1 = if (wf1Str.isNotBlank()) {
+                wf1Str.split(",").mapNotNull { it.toFloatOrNull() }
+            } else emptyList()
+            val wf2Str = json.optString("wf2", "")
+            val wf2 = if (wf2Str.isNotBlank()) {
+                wf2Str.split(",").mapNotNull { it.toFloatOrNull() }
+            } else emptyList()
+
             return AudioTrack(
                 id = id,
                 uriString = uri,
                 title = title,
-                durationMs = durationMs
+                durationMs = durationMs,
+                waveformPoints = wf1,
+                waveformPointsCh2 = wf2
             )
         }
     }
@@ -80,3 +107,11 @@ data class LeoPlaylist(
         }
     }
 }
+
+data class LoadingState(
+    val isLoading: Boolean = false,
+    val fileName: String = "",
+    val progress: Float = 0f,
+    val currentItem: Int = 1,
+    val totalItems: Int = 1
+)

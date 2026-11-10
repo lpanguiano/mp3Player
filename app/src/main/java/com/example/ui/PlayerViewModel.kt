@@ -12,9 +12,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.LeoPlaylistManager
 import com.example.model.AudioTrack
 import com.example.model.LeoPlaylist
+import com.example.model.LoadingState
 import com.example.playback.AudioPlayerService
 import com.example.playback.PlaybackState
 import com.example.util.AudioUtil
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,9 +27,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private var playerService: AudioPlayerService? = null
     private var isBound = false
+    private var waveformJob: Job? = null
+    private var currentAnalyzingTrackId: String? = null
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
+
+    private val _loadingState = MutableStateFlow(LoadingState())
+    val loadingState: StateFlow<LoadingState> = _loadingState.asStateFlow()
 
     private val _currentPlaylist = MutableStateFlow(LeoPlaylist("Lista Actual"))
     val currentPlaylist: StateFlow<LeoPlaylist> = _currentPlaylist.asStateFlow()
@@ -58,7 +65,30 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
                 viewModelScope.launch {
                     s.playbackState.collectLatest { state ->
-                        _playbackState.value = state
+                        val cur = state.currentTrack
+                        val cached = if (cur != null && cur.waveformPoints.isEmpty()) {
+                            _currentPlaylist.value.tracks.find { (it.id == cur.id || it.uriString == cur.uriString) && it.waveformPoints.isNotEmpty() }
+                        } else null
+
+                        if (cached != null) {
+                            val enriched = state.copy(
+                                currentTrack = cur!!.copy(
+                                    waveformPoints = cached.waveformPoints,
+                                    waveformPointsCh2 = cached.waveformPointsCh2,
+                                    durationMs = if (cur.durationMs <= 0L) cached.durationMs else cur.durationMs
+                                )
+                            )
+                            _playbackState.value = enriched
+                            s.updateCurrentTrackWaveform(cached)
+                        } else {
+                            _playbackState.value = state
+                            if (cur != null && cur.waveformPoints.isEmpty()) {
+                                ensureTrackWaveform(cur)
+                            } else if (cur != null && cur.waveformPoints.isNotEmpty() && currentAnalyzingTrackId == cur.id) {
+                                currentAnalyzingTrackId = null
+                                _loadingState.value = LoadingState(isLoading = false)
+                            }
+                        }
                     }
                 }
             }
@@ -84,10 +114,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun openAndPlaySingleAudio(uri: Uri) {
         viewModelScope.launch {
+            val context = getApplication<Application>()
+            val quickName = AudioUtil.getQuickFileName(context, uri)
+            _loadingState.value = LoadingState(
+                isLoading = true,
+                fileName = quickName,
+                progress = 0.02f,
+                currentItem = 1,
+                totalItems = 1
+            )
             try {
-                val context = getApplication<Application>()
                 takePersistablePermission(context, uri)
-                val track = AudioUtil.resolveTrackFromUri(context, uri)
+                val track = AudioUtil.resolveTrackFromUri(context, uri) { p ->
+                    _loadingState.value = _loadingState.value.copy(progress = p)
+                }
                 val newPlaylist = LeoPlaylist(
                     name = track.title,
                     tracks = listOf(track)
@@ -97,6 +137,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 _statusMessage.value = "Reproduciendo: ${track.title}"
             } catch (e: Exception) {
                 _statusMessage.value = "Error al abrir audio: ${e.localizedMessage}"
+            } finally {
+                _loadingState.value = LoadingState(isLoading = false)
             }
         }
     }
@@ -106,29 +148,49 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val context = getApplication<Application>()
             val newTracks = mutableListOf<AudioTrack>()
-            for (uri in uris) {
-                takePersistablePermission(context, uri)
-                val track = AudioUtil.resolveTrackFromUri(context, uri)
-                newTracks.add(track)
+            val total = uris.size
+            for ((index, uri) in uris.withIndex()) {
+                val quickName = AudioUtil.getQuickFileName(context, uri)
+                _loadingState.value = LoadingState(
+                    isLoading = true,
+                    fileName = quickName,
+                    progress = 0.02f,
+                    currentItem = index + 1,
+                    totalItems = total
+                )
+                try {
+                    takePersistablePermission(context, uri)
+                    val track = AudioUtil.resolveTrackFromUri(context, uri) { p ->
+                        _loadingState.value = _loadingState.value.copy(progress = p)
+                    }
+                    newTracks.add(track)
+                } catch (_: Exception) {}
             }
+            _loadingState.value = LoadingState(isLoading = false)
 
-            val updatedTracks = _currentPlaylist.value.tracks + newTracks
-            val updated = _currentPlaylist.value.copy(tracks = updatedTracks)
-            _currentPlaylist.value = updated
+            if (newTracks.isNotEmpty()) {
+                val updatedTracks = _currentPlaylist.value.tracks + newTracks
+                val updated = _currentPlaylist.value.copy(tracks = updatedTracks)
+                _currentPlaylist.value = updated
 
-            // If nothing is playing, start from first newly added track
-            if (!_playbackState.value.isPlaying && _playbackState.value.currentTrack == null && updatedTracks.isNotEmpty()) {
-                val startIndex = (_currentPlaylist.value.tracks.size - newTracks.size).coerceAtLeast(0)
-                playerService?.setPlaylistAndPlay(updatedTracks, startIndex)
+                // If nothing is playing, start from first newly added track
+                if (!_playbackState.value.isPlaying && _playbackState.value.currentTrack == null && updatedTracks.isNotEmpty()) {
+                    val startIndex = (_currentPlaylist.value.tracks.size - newTracks.size).coerceAtLeast(0)
+                    playerService?.setPlaylistAndPlay(updatedTracks, startIndex)
+                }
+                _statusMessage.value = "${newTracks.size} archivos agregados"
             }
-            _statusMessage.value = "${newTracks.size} archivos agregados"
         }
     }
 
     fun playTrackAtIndex(index: Int) {
         val tracks = _currentPlaylist.value.tracks
         if (index in tracks.indices) {
+            val track = tracks[index]
             playerService?.setPlaylistAndPlay(tracks, index)
+            if (track.waveformPoints.isEmpty()) {
+                ensureTrackWaveform(track)
+            }
         }
     }
 
@@ -225,7 +287,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             val context = getApplication<Application>()
             val success = LeoPlaylistManager.saveToUri(context, uri, _currentPlaylist.value)
             if (success) {
-                _statusMessage.value = "Archivo .leo exportado con éxito"
+                _statusMessage.value = "Lista guardada como archivo .leo"
             } else {
                 _statusMessage.value = "Error al exportar archivo .leo"
             }
@@ -247,9 +309,107 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun loadPlaylist(playlist: LeoPlaylist) {
+        val context = getApplication<Application>()
+        playlist.tracks.forEach { track ->
+            takePersistablePermission(context, track.uri)
+        }
         _currentPlaylist.value = playlist
         if (playlist.tracks.isNotEmpty()) {
             playerService?.setPlaylistAndPlay(playlist.tracks, 0)
+            val first = playlist.tracks[0]
+            if (first.waveformPoints.isEmpty()) {
+                ensureTrackWaveform(first)
+            }
+        }
+    }
+
+    private fun ensureTrackWaveform(track: AudioTrack) {
+        // Check if track is already in currentPlaylist with waveforms
+        val inList = _currentPlaylist.value.tracks.find {
+            (it.id == track.id || it.uriString == track.uriString) && it.waveformPoints.isNotEmpty()
+        }
+        if (inList != null) {
+            playerService?.updateCurrentTrackWaveform(inList)
+            val cur = _playbackState.value.currentTrack
+            if (cur != null && (cur.id == track.id || cur.uriString == track.uriString)) {
+                _playbackState.value = _playbackState.value.copy(
+                    currentTrack = cur.copy(
+                        waveformPoints = inList.waveformPoints,
+                        waveformPointsCh2 = inList.waveformPointsCh2,
+                        durationMs = if (cur.durationMs <= 0L) inList.durationMs else cur.durationMs
+                    )
+                )
+            }
+            if (currentAnalyzingTrackId == track.id) {
+                currentAnalyzingTrackId = null
+                _loadingState.value = LoadingState(isLoading = false)
+            }
+            return
+        }
+
+        if (track.waveformPoints.isNotEmpty()) {
+            if (currentAnalyzingTrackId == track.id) {
+                waveformJob?.cancel()
+                currentAnalyzingTrackId = null
+                _loadingState.value = LoadingState(isLoading = false)
+            }
+            return
+        }
+
+        if (currentAnalyzingTrackId == track.id) return
+        currentAnalyzingTrackId = track.id
+
+        waveformJob?.cancel()
+        waveformJob = viewModelScope.launch {
+            val context = getApplication<Application>()
+            val quickName = track.title.ifBlank { AudioUtil.getQuickFileName(context, track.uri) }
+            _loadingState.value = LoadingState(
+                isLoading = true,
+                fileName = quickName,
+                progress = 0.05f,
+                currentItem = 1,
+                totalItems = 1
+            )
+            try {
+                takePersistablePermission(context, track.uri)
+                val resolvedTrack = AudioUtil.resolveTrackFromUri(
+                    context = context,
+                    uri = track.uri,
+                    trackId = track.id
+                ) { p ->
+                    _loadingState.value = _loadingState.value.copy(progress = p)
+                }
+
+                // Invalidate any old empty waveform and update player service
+                playerService?.updateCurrentTrackWaveform(resolvedTrack)
+
+                // Directly enrich current playback state in ViewModel for instant UI rendering
+                val cur = _playbackState.value.currentTrack
+                if (cur != null && (cur.id == track.id || cur.uriString == track.uriString)) {
+                    _playbackState.value = _playbackState.value.copy(
+                        currentTrack = cur.copy(
+                            waveformPoints = resolvedTrack.waveformPoints,
+                            waveformPointsCh2 = resolvedTrack.waveformPointsCh2,
+                            durationMs = if (cur.durationMs <= 0L) resolvedTrack.durationMs else cur.durationMs
+                        )
+                    )
+                }
+
+                // Cache in _currentPlaylist so subsequent plays don't re-analyze
+                val currentTracks = _currentPlaylist.value.tracks.toMutableList()
+                val idx = currentTracks.indexOfFirst { it.id == track.id || it.uriString == track.uriString }
+                if (idx != -1) {
+                    currentTracks[idx] = resolvedTrack
+                    _currentPlaylist.value = _currentPlaylist.value.copy(tracks = currentTracks)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                if (currentAnalyzingTrackId == track.id) {
+                    currentAnalyzingTrackId = null
+                    _loadingState.value = LoadingState(isLoading = false)
+                }
+            }
         }
     }
 
