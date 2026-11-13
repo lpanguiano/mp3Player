@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
         if (uri != null) {
             intent.data = null // Clear to avoid re-triggering on reopen
             val path = uri.toString().lowercase()
-            if (path.endsWith(".leo")) {
+            if (path.endsWith(".leo") || path.endsWith(".lpa")) {
                 viewModel.loadPlaylistFromSAF(uri)
             } else {
                 viewModel.openAndPlaySingleAudio(uri)

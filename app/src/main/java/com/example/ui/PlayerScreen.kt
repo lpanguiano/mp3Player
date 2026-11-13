@@ -285,8 +285,38 @@ fun PlayerScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Loading overlay with file name and progress bar
-                if (loadingState.isLoading) {
+                // Non-blocking compact indicator while waveform renders progressively from left to right
+                if (loadingState.isAnalyzingSpectrum) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.Black.copy(alpha = 0.78f))
+                            .border(1.dp, NeonGreen.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "Espectro: ${(loadingState.progress * 100).toInt()}%",
+                                color = NeonGreen,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            LinearProgressIndicator(
+                                progress = { loadingState.progress },
+                                modifier = Modifier
+                                    .width(96.dp)
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
+                                color = NeonGreen,
+                                trackColor = DarkCard
+                            )
+                        }
+                    }
+                } else if (loadingState.isLoading) {
+                    // Blocking loading overlay (kept only for explicit blocking loads if ever needed)
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -732,7 +762,7 @@ fun PlayerScreen(
                 exportLeoLauncher.launch(cleanName)
             },
             onImportLeo = { importLeoLauncher.launch(arrayOf("*/*")) },
-            onLoadSavedPlaylist = { saved -> viewModel.loadPlaylist(saved) },
+            onLoadSavedPlaylist = { saved -> viewModel.loadSavedLocalPlaylist(saved) },
             onDeleteSavedPlaylist = { name -> viewModel.deleteLocalPlaylist(name) }
         )
     }

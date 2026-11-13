@@ -110,6 +110,7 @@ data class LeoPlaylist(
 
 data class LoadingState(
     val isLoading: Boolean = false,
+    val isAnalyzingSpectrum: Boolean = false,
     val fileName: String = "",
     val progress: Float = 0f,
     val currentItem: Int = 1,

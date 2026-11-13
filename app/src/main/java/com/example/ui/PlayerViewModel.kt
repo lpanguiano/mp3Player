@@ -30,6 +30,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private var waveformJob: Job? = null
     private var currentAnalyzingTrackId: String? = null
 
+    // Tracks whether the current playlist is backed by an actual playlist file (.leo/.lpa or local)
+    private var activePlaylistSafUri: Uri? = null
+    private var activeLocalPlaylistName: String? = null
+
+    // Holds progressive waveform points during background analysis to prevent ticker flicker
+    @Volatile
+    private var partialTrackId: String? = null
+    @Volatile
+    private var partialCh1: List<Float> = emptyList()
+    @Volatile
+    private var partialCh2: List<Float> = emptyList()
+
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
@@ -67,7 +79,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     s.playbackState.collectLatest { state ->
                         val cur = state.currentTrack
                         val cached = if (cur != null && cur.waveformPoints.isEmpty()) {
-                            _currentPlaylist.value.tracks.find { (it.id == cur.id || it.uriString == cur.uriString) && it.waveformPoints.isNotEmpty() }
+                            _currentPlaylist.value.tracks.find {
+                                (it.id == cur.id || it.uriString == cur.uriString) && it.waveformPoints.isNotEmpty()
+                            }
                         } else null
 
                         if (cached != null) {
@@ -80,13 +94,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                             )
                             _playbackState.value = enriched
                             s.updateCurrentTrackWaveform(cached)
+                        } else if (cur != null && cur.waveformPoints.isEmpty() && partialTrackId == cur.id && partialCh1.isNotEmpty()) {
+                            // Keep progressive bars visible smoothly across service position ticker updates
+                            _playbackState.value = state.copy(
+                                currentTrack = cur.copy(
+                                    waveformPoints = partialCh1,
+                                    waveformPointsCh2 = partialCh2
+                                )
+                            )
                         } else {
                             _playbackState.value = state
                             if (cur != null && cur.waveformPoints.isEmpty()) {
                                 ensureTrackWaveform(cur)
                             } else if (cur != null && cur.waveformPoints.isNotEmpty() && currentAnalyzingTrackId == cur.id) {
                                 currentAnalyzingTrackId = null
-                                _loadingState.value = LoadingState(isLoading = false)
+                                partialTrackId = null
+                                _loadingState.value = LoadingState()
                             }
                         }
                     }
@@ -112,33 +135,33 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
+    /**
+     * Opens a single standalone audio file WITHOUT blocking playback.
+     * Because this audio does not belong to a saved playlist file, its generated spectrum
+     * is NOT saved to any playlist file on disk.
+     */
     fun openAndPlaySingleAudio(uri: Uri) {
+        activePlaylistSafUri = null
+        activeLocalPlaylistName = null
+        waveformJob?.cancel()
+        currentAnalyzingTrackId = null
+        partialTrackId = null
+
         viewModelScope.launch {
             val context = getApplication<Application>()
-            val quickName = AudioUtil.getQuickFileName(context, uri)
-            _loadingState.value = LoadingState(
-                isLoading = true,
-                fileName = quickName,
-                progress = 0.02f,
-                currentItem = 1,
-                totalItems = 1
-            )
             try {
                 takePersistablePermission(context, uri)
-                val track = AudioUtil.resolveTrackFromUri(context, uri) { p ->
-                    _loadingState.value = _loadingState.value.copy(progress = p)
-                }
-                val newPlaylist = LeoPlaylist(
-                    name = track.title,
-                    tracks = listOf(track)
+                val quickTrack = AudioUtil.resolveQuickTrackMetadata(context, uri)
+                val singleList = LeoPlaylist(
+                    name = quickTrack.title,
+                    tracks = listOf(quickTrack)
                 )
-                _currentPlaylist.value = newPlaylist
-                playerService?.setPlaylistAndPlay(listOf(track), 0)
-                _statusMessage.value = "Reproduciendo: ${track.title}"
+                _currentPlaylist.value = singleList
+                playerService?.setPlaylistAndPlay(listOf(quickTrack), 0, quickTrack.title)
+                _statusMessage.value = "Reproduciendo: ${quickTrack.title}"
+                ensureTrackWaveform(quickTrack)
             } catch (e: Exception) {
                 _statusMessage.value = "Error al abrir audio: ${e.localizedMessage}"
-            } finally {
-                _loadingState.value = LoadingState(isLoading = false)
             }
         }
     }
@@ -148,35 +171,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val context = getApplication<Application>()
             val newTracks = mutableListOf<AudioTrack>()
-            val total = uris.size
-            for ((index, uri) in uris.withIndex()) {
-                val quickName = AudioUtil.getQuickFileName(context, uri)
-                _loadingState.value = LoadingState(
-                    isLoading = true,
-                    fileName = quickName,
-                    progress = 0.02f,
-                    currentItem = index + 1,
-                    totalItems = total
-                )
+            for (uri in uris) {
                 try {
                     takePersistablePermission(context, uri)
-                    val track = AudioUtil.resolveTrackFromUri(context, uri) { p ->
-                        _loadingState.value = _loadingState.value.copy(progress = p)
-                    }
-                    newTracks.add(track)
+                    val quickTrack = AudioUtil.resolveQuickTrackMetadata(context, uri)
+                    newTracks.add(quickTrack)
                 } catch (_: Exception) {}
             }
-            _loadingState.value = LoadingState(isLoading = false)
 
             if (newTracks.isNotEmpty()) {
                 val updatedTracks = _currentPlaylist.value.tracks + newTracks
                 val updated = _currentPlaylist.value.copy(tracks = updatedTracks)
                 _currentPlaylist.value = updated
 
-                // If nothing is playing, start from first newly added track
+                // If nothing is playing, start immediately from first newly added track
                 if (!_playbackState.value.isPlaying && _playbackState.value.currentTrack == null && updatedTracks.isNotEmpty()) {
                     val startIndex = (_currentPlaylist.value.tracks.size - newTracks.size).coerceAtLeast(0)
-                    playerService?.setPlaylistAndPlay(updatedTracks, startIndex)
+                    playerService?.setPlaylistAndPlay(updatedTracks, startIndex, updated.name)
+                    ensureTrackWaveform(updatedTracks[startIndex])
                 }
                 _statusMessage.value = "${newTracks.size} archivos agregados"
             }
@@ -187,7 +199,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val tracks = _currentPlaylist.value.tracks
         if (index in tracks.indices) {
             val track = tracks[index]
-            playerService?.setPlaylistAndPlay(tracks, index)
+            playerService?.setPlaylistAndPlay(tracks, index, _currentPlaylist.value.name)
             if (track.waveformPoints.isEmpty()) {
                 ensureTrackWaveform(track)
             }
@@ -260,6 +272,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun clearPlaylist() {
+        activePlaylistSafUri = null
+        activeLocalPlaylistName = null
+        waveformJob?.cancel()
+        currentAnalyzingTrackId = null
+        partialTrackId = null
+        _loadingState.value = LoadingState()
         _currentPlaylist.value = LeoPlaylist("Nueva Lista")
         playerService?.stopPlayback()
         _statusMessage.value = "Lista vaciada"
@@ -272,9 +290,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun saveCurrentPlaylistLocally() {
         viewModelScope.launch {
             val context = getApplication<Application>()
-            val success = LeoPlaylistManager.saveLocally(context, _currentPlaylist.value)
+            val playlist = _currentPlaylist.value
+            val success = LeoPlaylistManager.saveLocally(context, playlist)
             if (success) {
-                _statusMessage.value = "Lista '${_currentPlaylist.value.name}' guardada"
+                activeLocalPlaylistName = playlist.name
+                activePlaylistSafUri = null
+                _statusMessage.value = "Lista '${playlist.name}' guardada"
                 refreshSavedPlaylists()
             } else {
                 _statusMessage.value = "Error al guardar la lista"
@@ -285,8 +306,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun savePlaylistToSAF(uri: Uri) {
         viewModelScope.launch {
             val context = getApplication<Application>()
+            takePersistableReadWritePermission(context, uri)
             val success = LeoPlaylistManager.saveToUri(context, uri, _currentPlaylist.value)
             if (success) {
+                activePlaylistSafUri = uri
+                activeLocalPlaylistName = null
                 _statusMessage.value = "Lista guardada como archivo .leo"
             } else {
                 _statusMessage.value = "Error al exportar archivo .leo"
@@ -297,25 +321,37 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun loadPlaylistFromSAF(uri: Uri) {
         viewModelScope.launch {
             val context = getApplication<Application>()
-            takePersistablePermission(context, uri)
+            takePersistableReadWritePermission(context, uri)
             val playlist = LeoPlaylistManager.loadFromUri(context, uri)
             if (playlist != null) {
-                loadPlaylist(playlist)
+                activePlaylistSafUri = uri
+                activeLocalPlaylistName = null
+                loadPlaylist(playlist, preserveOrigin = true)
                 _statusMessage.value = "Lista cargada: ${playlist.name}"
             } else {
-                _statusMessage.value = "Error al leer archivo .leo"
+                _statusMessage.value = "Error al leer archivo de lista"
             }
         }
     }
 
-    fun loadPlaylist(playlist: LeoPlaylist) {
+    fun loadSavedLocalPlaylist(playlist: LeoPlaylist) {
+        activeLocalPlaylistName = playlist.name
+        activePlaylistSafUri = null
+        loadPlaylist(playlist, preserveOrigin = true)
+    }
+
+    fun loadPlaylist(playlist: LeoPlaylist, preserveOrigin: Boolean = false) {
+        if (!preserveOrigin) {
+            activePlaylistSafUri = null
+            activeLocalPlaylistName = null
+        }
         val context = getApplication<Application>()
         playlist.tracks.forEach { track ->
             takePersistablePermission(context, track.uri)
         }
         _currentPlaylist.value = playlist
         if (playlist.tracks.isNotEmpty()) {
-            playerService?.setPlaylistAndPlay(playlist.tracks, 0)
+            playerService?.setPlaylistAndPlay(playlist.tracks, 0, playlist.name)
             val first = playlist.tracks[0]
             if (first.waveformPoints.isEmpty()) {
                 ensureTrackWaveform(first)
@@ -324,7 +360,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun ensureTrackWaveform(track: AudioTrack) {
-        // Check if track is already in currentPlaylist with waveforms
+        // Check if track is already cached in _currentPlaylist with waveforms
         val inList = _currentPlaylist.value.tracks.find {
             (it.id == track.id || it.uriString == track.uriString) && it.waveformPoints.isNotEmpty()
         }
@@ -342,7 +378,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             }
             if (currentAnalyzingTrackId == track.id) {
                 currentAnalyzingTrackId = null
-                _loadingState.value = LoadingState(isLoading = false)
+                partialTrackId = null
+                _loadingState.value = LoadingState()
             }
             return
         }
@@ -351,39 +388,67 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             if (currentAnalyzingTrackId == track.id) {
                 waveformJob?.cancel()
                 currentAnalyzingTrackId = null
-                _loadingState.value = LoadingState(isLoading = false)
+                partialTrackId = null
+                _loadingState.value = LoadingState()
             }
             return
         }
 
         if (currentAnalyzingTrackId == track.id) return
         currentAnalyzingTrackId = track.id
+        partialTrackId = track.id
+        partialCh1 = emptyList()
+        partialCh2 = emptyList()
 
         waveformJob?.cancel()
         waveformJob = viewModelScope.launch {
             val context = getApplication<Application>()
             val quickName = track.title.ifBlank { AudioUtil.getQuickFileName(context, track.uri) }
+
+            // Non-blocking progressive indicator (does NOT block playback or cover oscilloscope)
             _loadingState.value = LoadingState(
-                isLoading = true,
+                isLoading = false,
+                isAnalyzingSpectrum = true,
                 fileName = quickName,
                 progress = 0.05f,
                 currentItem = 1,
                 totalItems = 1
             )
+
             try {
                 takePersistablePermission(context, track.uri)
                 val resolvedTrack = AudioUtil.resolveTrackFromUri(
                     context = context,
                     uri = track.uri,
-                    trackId = track.id
-                ) { p ->
-                    _loadingState.value = _loadingState.value.copy(progress = p)
-                }
+                    trackId = track.id,
+                    onProgress = { p ->
+                        if (currentAnalyzingTrackId == track.id) {
+                            _loadingState.value = _loadingState.value.copy(progress = p)
+                        }
+                    },
+                    onPartialWaveform = { ch1, ch2 ->
+                        if (currentAnalyzingTrackId == track.id) {
+                            partialCh1 = ch1
+                            partialCh2 = ch2
+                            val cur = _playbackState.value.currentTrack
+                            if (cur != null && (cur.id == track.id || cur.uriString == track.uriString)) {
+                                _playbackState.value = _playbackState.value.copy(
+                                    currentTrack = cur.copy(
+                                        waveformPoints = ch1,
+                                        waveformPointsCh2 = ch2
+                                    )
+                                )
+                            }
+                        }
+                    }
+                )
 
-                // Invalidate any old empty waveform and update player service
+                partialTrackId = null
+
+                // Update player service with completed waveform
                 playerService?.updateCurrentTrackWaveform(resolvedTrack)
 
-                // Directly enrich current playback state in ViewModel for instant UI rendering
+                // Enrich ViewModel playback state immediately
                 val cur = _playbackState.value.currentTrack
                 if (cur != null && (cur.id == track.id || cur.uriString == track.uriString)) {
                     _playbackState.value = _playbackState.value.copy(
@@ -395,20 +460,43 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
 
-                // Cache in _currentPlaylist so subsequent plays don't re-analyze
+                // Cache in current playlist in memory
                 val currentTracks = _currentPlaylist.value.tracks.toMutableList()
                 val idx = currentTracks.indexOfFirst { it.id == track.id || it.uriString == track.uriString }
                 if (idx != -1) {
                     currentTracks[idx] = resolvedTrack
-                    _currentPlaylist.value = _currentPlaylist.value.copy(tracks = currentTracks)
+                    val updatedPlaylist = _currentPlaylist.value.copy(tracks = currentTracks)
+                    _currentPlaylist.value = updatedPlaylist
+
+                    // Save spectrum back to the SAME playlist file ONLY if audio belongs to a playlist file
+                    persistPlaylistIfBackedByFile(context, updatedPlaylist)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
                 if (currentAnalyzingTrackId == track.id) {
                     currentAnalyzingTrackId = null
-                    _loadingState.value = LoadingState(isLoading = false)
+                    partialTrackId = null
+                    _loadingState.value = LoadingState()
                 }
+            }
+        }
+    }
+
+    /**
+     * Persists updated playlist (with newly generated waveform spectrum) back into the same
+     * SAF playlist file or local saved playlist file. Does nothing for standalone single tracks.
+     */
+    private suspend fun persistPlaylistIfBackedByFile(context: Context, updatedPlaylist: LeoPlaylist) {
+        val safUri = activePlaylistSafUri
+        val localName = activeLocalPlaylistName
+
+        if (safUri != null) {
+            LeoPlaylistManager.saveToUri(context, safUri, updatedPlaylist)
+        } else if (localName != null) {
+            val saved = LeoPlaylistManager.saveLocally(context, updatedPlaylist)
+            if (saved) {
+                _savedPlaylists.value = LeoPlaylistManager.listLocalPlaylists(context)
             }
         }
     }
@@ -417,6 +505,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val context = getApplication<Application>()
             LeoPlaylistManager.deleteLocal(context, name)
+            if (activeLocalPlaylistName == name) {
+                activeLocalPlaylistName = null
+            }
             refreshSavedPlaylists()
             _statusMessage.value = "Lista eliminada"
         }
@@ -446,8 +537,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         } catch (_: Exception) {}
     }
 
+    private fun takePersistableReadWritePermission(context: Context, uri: Uri) {
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (_: Exception) {
+            takePersistablePermission(context, uri)
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        waveformJob?.cancel()
         if (isBound) {
             try {
                 getApplication<Application>().unbindService(serviceConnection)

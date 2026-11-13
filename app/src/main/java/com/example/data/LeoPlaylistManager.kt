@@ -16,7 +16,13 @@ object LeoPlaylistManager {
 
     suspend fun saveToUri(context: Context, uri: Uri, playlist: LeoPlaylist): Boolean = withContext(Dispatchers.IO) {
         try {
-            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+            val stream = try {
+                context.contentResolver.openOutputStream(uri, "wt")
+            } catch (_: Exception) {
+                context.contentResolver.openOutputStream(uri)
+            } ?: return@withContext false
+
+            stream.use { outputStream ->
                 OutputStreamWriter(outputStream, Charsets.UTF_8).use { writer ->
                     writer.write(playlist.toJsonString())
                     writer.flush()
@@ -60,7 +66,7 @@ object LeoPlaylistManager {
         val dir = File(context.filesDir, PLAYLISTS_DIR)
         if (!dir.exists()) return@withContext emptyList()
         val list = mutableListOf<LeoPlaylist>()
-        dir.listFiles { _, name -> name.endsWith(".leo") }?.forEach { file ->
+        dir.listFiles { _, name -> name.endsWith(".leo") || name.endsWith(".lpa") }?.forEach { file ->
             try {
                 val content = file.readText(Charsets.UTF_8)
                 list.add(LeoPlaylist.fromJsonString(content))
